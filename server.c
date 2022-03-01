@@ -27,7 +27,7 @@
 #define NOT_FOUND_HEADER "HTTP/1.1 404 Not Found\r\n"
 #define BAD_REQUEST_HEADER "HTTP/1.1 400 Bad Request\r\n"
 
-#define BUFFER_SIZE 4096
+#define BUFFER_SIZE 2048
 
 typedef enum stat_fields {
     USER, NICE, SYSTEM, IDLE, IO_WAIT, IRQ, SOFTIRQ, STEAL, STAT_FIELDS_NUM
