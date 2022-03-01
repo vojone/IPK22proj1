@@ -1,3 +1,13 @@
+/******************************************************************************
+ *                       IPK - project 1 - Simple HTTP server
+ * 
+ *                                File: server.c
+ *                            Author: Vojtech Dvorak
+ * 
+ *                                  Feb 2022
+ * 
+ * ***************************************************************************/
+
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/types.h>
@@ -11,35 +21,70 @@
 
 #define BACKLOG 3
 
+#define MAX_PORT_NUM 65535
+
+#define HTTP_RESP_HEADER "HTTP/1.1 200 OK\r\nContent-Length: %ld\r\nContent-Type: text/plain\r\n\r\n"
+#define NOT_FOUND_HEADER "HTTP/1.1 404 Not Found\r\n"
+#define BAD_REQUEST_HEADER "HTTP/1.1 400 Bad Request\r\n"
+
+#define BUFFER_SIZE 4096
+
+typedef enum stat_fields {
+    USER, NICE, SYSTEM, IDLE, IO_WAIT, IRQ, SOFTIRQ, STEAL, STAT_FIELDS_NUM
+} t_stat_fields;
+
+/**
+ * @brief Prints usage to stdout
+ */
 void printUsage() {
     fprintf(stderr, "Usage: .\\hinfosvc <PORT_NUMBER>\n");
 }
 
-int main(int argc, char **argv) {
+/**
+ * @brief Gets port number from arguments of program and check its validity
+ * @param argc From main function
+ * @param argv From main function
+ * @return int Port number where server should listen
+ */
+int parse_args(int argc, char **argv) {
     if(argc <= 1) {
         fprintf(stderr, "Port number missing!\n");
         printUsage();
-        return EXIT_FAILURE;
+
+        exit(EXIT_FAILURE);
     }
 
     char *end;
     unsigned int port_number = strtoul(argv[1], &end, 10);
-    if(*end != '\0') {
+    if(*end != '\0' || port_number > MAX_PORT_NUM) {
         fprintf(stderr, "Error! Invalid port number\n");
         printUsage();
-        return EXIT_FAILURE;
+
+        exit(EXIT_FAILURE);
     }
 
-    int server = socket(AF_INET6, SOCK_STREAM, 0);
-    if(server < -1) {
+    return port_number;
+}
+
+/**
+ * @brief Create a server socket and assigns it to given port
+ * @param port_number Port where should be server socket set
+ * @return int socket fd
+ */
+int create_server_socket(int port_number) {
+    int server_socket = socket(AF_INET6, SOCK_STREAM, 0);
+    if(server_socket < -1) {
         perror("Cannot create server socket!");
-        return EXIT_FAILURE;
+        exit(EXIT_FAILURE);
     }
 
     int opt = 1;
-    if(setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+
+    //Set options of server socket
+    if(setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
         perror("Unable to set server socket!");
-        return EXIT_FAILURE;
+        close(server_socket);
+        exit(EXIT_FAILURE);
     }
 
     struct sockaddr_in6 server_addr;
@@ -48,193 +93,276 @@ int main(int argc, char **argv) {
     server_addr.sin6_port = htons(port_number);
     server_addr.sin6_addr = in6addr_any;
 
-    if(bind(server, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+    if(bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
         perror("Cannot bind socket to the port!");
+        close(server_socket);
         return EXIT_FAILURE;
     }
 
-    if(listen(server, BACKLOG) < 0) {
-        perror("Error while setting socket to listen mode!");
-        return EXIT_FAILURE;
+    return server_socket;
+}
+
+/**
+ * @brief Marks server socket as passive listening socket
+ * @note If it cannot be set to this mode it closes the socket 
+ *       and ends program with EXIT_FAILURE
+ */
+void set_to_listen(int server_socket) {
+    if(listen(server_socket, BACKLOG) < 0) {
+        perror("Error while setting socket to listening!");
+        close(server_socket);
+        exit(EXIT_FAILURE);
     }
+}
+
+/**
+ * @brief Reads one line from given file 
+ * @param out_buffer Buffer where will be loaded read line
+ * @param buffer_size Size of given buffer
+ * @param source Source file from which will be read line
+ * @return size_t Length of line
+ */
+size_t read_line(char *out_buffer, size_t buffer_size, FILE *source) {
+    char cur_char;
+    size_t cur_len = 0;
+
+    do {
+        cur_char = fgetc(source);
+        if(cur_char != EOF && cur_char != '\n' && cur_len < buffer_size - 1) {
+            *(out_buffer + cur_len) = cur_char;
+            cur_len++;
+        }
+    }
+    while(cur_char != EOF && cur_char != '\n' && cur_len < buffer_size - 1);
+
+    out_buffer[cur_len] = '\0';
+
+    return cur_len;
+}
+
+/**
+ * @brief Reads hostname of machine from /etc/hostname
+ * @param buffer Points to buffer where is hostname stored
+ * @param len Length of hostname
+ * @return true If everything was OK
+ * @return false If an error occured
+ */
+bool read_hostname(char *buffer, size_t *len) {
+    FILE * hostname_fd = fopen("/etc/hostname", "r");
+    if(!hostname_fd) {
+        perror("Cannot get the hostname!");
+        return false;
+    }
+
+    read_line(buffer, BUFFER_SIZE - 1, hostname_fd);
+    strcat(buffer, "\n");
+
+    *len = strlen(buffer);
+
+    fclose(hostname_fd);
+
+    return true;
+}
+
+/**
+ * @brief Reads hostname of machine from /etc/hostname
+ * @param buffer Points to buffer where is hostname stored
+ * @param len Length of hostname
+ * @return true If everything was OK
+ * @return false If an error occured
+ */
+bool read_cpu_name(char *buffer, size_t *len) {
+    FILE * cpuinfo_fd = fopen("/proc/cpuinfo", "r");
+    if(!cpuinfo_fd) {
+        perror("Cannot get info about CPU!");
+        return false;
+    }
+
+    char *wanted_row = "model name";
+    char tmp[BUFFER_SIZE];
+    
+    do {
+        read_line(tmp, BUFFER_SIZE, cpuinfo_fd);
+    }
+    while(!strstr(tmp, wanted_row));
+
+    strtok(tmp, ":"); //Set strtok function and throw away line start
+    char *cpu_name = strtok(NULL, ":");
+    if(buffer == NULL) {
+        perror("Cannot get info about CPU! Error while reading file!");
+        fclose(cpuinfo_fd);
+        return false;
+    }
+
+    //There is whitespace before cpu name -> cpu_name + 1
+    strncpy(buffer, cpu_name + 1, BUFFER_SIZE - 1);
+    strcat(buffer, "\n");
+
+    *len = strlen(buffer);
+
+    fclose(cpuinfo_fd);
+
+    return true;
+}
+
+/**
+ * @brief Reads cpu stats from /proc/stat (it can be used for computing cpu load)
+ * @param stat_arr Array that will be filled by values from read file
+ * @return true If reading of /proc/stat was succesful
+ * @return false If an error occured
+ */
+bool read_stats(unsigned int *stat_arr) {
+    FILE* stat_file_fd = fopen("/proc/stat", "r");
+    if(!stat_file_fd) {
+        perror("Unable to get CPU status file!");
+        return false;
+    }
+
+    char tmp[BUFFER_SIZE];
+    read_line(tmp, BUFFER_SIZE, stat_file_fd);
+    
+    strtok(tmp, " ");
+    for(int i = 0; i < STAT_FIELDS_NUM; i++) {
+        char *str = strtok(NULL, " ");
+        if(str == NULL) {
+            perror("Unable to read all informations from CPU stat file!");
+            fclose(stat_file_fd);
+            return false;
+        }
+
+        //Converting string to integer (due to source file we can assume that it has numeric format)
+        stat_arr[i] = atoi(str); 
+    }
+
+    fclose(stat_file_fd);
+
+    return true;
+}
+
+/**
+ * @brief Returns string buffer with cpu load (in percent)
+ * @param buffer Destination buffer with string
+ * @param len Length of returned string
+ * @return true If computing of load was succesful
+ * @return false If an error occured
+ */
+bool get_load(char *buffer, size_t *len) {
+    unsigned int prev_stats[STAT_FIELDS_NUM];
+    unsigned int stats[STAT_FIELDS_NUM];
+
+    if(!read_stats(prev_stats)) {
+        return false;
+    }
+
+    sleep(1);
+
+    if(!read_stats(stats)) {
+        return false;
+    }
+    
+    //Computation of CPU load was taken from https://stackoverflow.com/questions/23367857/accurate-calculation-of-cpu-usage-given-in-percentage-in-linux
+    unsigned int pnon_idle = prev_stats[USER] + prev_stats[NICE] + prev_stats[SYSTEM] + prev_stats[IRQ] + prev_stats[SOFTIRQ] + prev_stats[STEAL];
+    unsigned int non_idle = stats[USER] + stats[NICE] + stats[SYSTEM] + stats[IRQ] + stats[SOFTIRQ] + stats[STEAL];
+
+    unsigned int ptotal = prev_stats[IDLE] + pnon_idle;
+    unsigned int total = stats[IDLE] + non_idle;
+
+    unsigned int total_diff = total - ptotal;
+    unsigned int idle_diff = stats[IDLE] - prev_stats[IDLE];
+
+    double cpu_load_perc = ((total_diff - idle_diff)/(double)total_diff)*100;
+    //
+
+    *len = snprintf(buffer, BUFFER_SIZE, "%.0f%%\n", cpu_load_perc);
+
+    return true;
+}
+
+/**
+ * @brief Create a response message
+ */
+char * create_response(char *dest, char *msg, size_t msg_len) {
+    int written = snprintf(dest, BUFFER_SIZE, HTTP_RESP_HEADER, msg_len);
+    strncat(dest, msg, BUFFER_SIZE - written - 1);
+
+    return dest;
+}
+
+/**
+ * @brief Get the path from HTTM request and checks its validity
+ * @param req Pointer to HTTP request message
+ * @return char* Pointer to path from HTTP request (or NULL if HTTP request has invalid format) 
+ */
+char * get_path(char *req) {
+    char *method = strtok(req, " ");
+    (void)method;
+
+    char *path = strtok(NULL, " ");
+
+    return path;
+}
+
+
+/**
+ * @brief Main function of HTTP server
+ */
+int main(int argc, char **argv) {
+    int port_number = parse_args(argc, argv);
+    int server_socket = create_server_socket(port_number);
+
+    set_to_listen(server_socket);
 
     struct sockaddr_in6 client_addr;
     socklen_t client_addr_len = sizeof(client_addr);
-    char msg_buffer[1024];
-    char cpu_name[1024];
-    memset(cpu_name, '\0', 1024);
+    char msg_buffer[BUFFER_SIZE];
+    char response[BUFFER_SIZE];
+    char payload[BUFFER_SIZE];
     while(true) {
-        int socket = accept(server, (struct sockaddr *)&client_addr, &client_addr_len);
+        int socket = accept(server_socket, (struct sockaddr *)&client_addr, &client_addr_len);
         if(socket <= 0) {
             perror("Error while accepting!");
             return EXIT_FAILURE;
         }
 
-        size_t msg_len = read(socket, msg_buffer, 1024);
-        char msg[1024];
-        memset(msg, '\0', 1024);
-        char *tmp1;
+        size_t msg_len = read(socket, msg_buffer, BUFFER_SIZE);
+        size_t payload_len = 0;
+
         if(msg_len > 0) {
-            char *method = strtok(msg_buffer, " ");
-            (void)method;
+            char *path = get_path(msg_buffer); //Get path from HTTP request
 
-            char *path = strtok(NULL, " ");
-            //fprintf(stderr, "%s\n", path);
-
-            if(strcmp(path, "/hostname") == 0) {
-                tmp1 = "HTTP/1.1 200 OK\r\nContent-Length: %ld\r\nContent-Type: text/plain\r\n\r\n";
-
-                char tmp[128];
-                if(gethostname(tmp, 128) < 0) {
-                    perror("Cannot get the hostname!");
+            if(path == NULL) { //Bad format of HTTP request
+                memcpy(response, BAD_REQUEST_HEADER, strlen(BAD_REQUEST_HEADER) + 1);
+            }
+            else if(strcmp(path, "/hostname") == 0) {
+                if(!read_hostname(payload, &payload_len)) {
+                    close(server_socket);
                     return EXIT_FAILURE;
                 }
 
-                snprintf(msg, 1024, tmp1, (strlen(tmp) + 1));
-                strcat(msg, tmp);
-                strcat(msg, "\n");
+                create_response(response, payload, payload_len);
             }
             else if(strcmp(path, "/cpu-name") == 0) {
-                tmp1 = "HTTP/1.1 200 OK\r\nContent-Length: %ld\r\nContent-Type: text/plain\r\n\r\n";
-
-                FILE* cpu_info_file = fopen("/proc/cpuinfo", "r");
-                if(!cpu_info_file) {
-                    perror("Unable to get CPU info!");
+               if(!read_cpu_name(payload, &payload_len)) {
+                    close(server_socket);
+                    return EXIT_FAILURE;
                 }
 
-                char tmp[1024];
-                memset(msg, '\0', 1024);
-                if(strcmp(cpu_name, "") == 0) {
-                    char *needed_info = "model name";
-                    char *info;
-                    char cur_char;
-
-                    while((cur_char = fgetc(cpu_info_file)) != EOF) {
-                        if(cur_char != '\n') {
-                            tmp[strlen(tmp)] = cur_char;
-                            tmp[strlen(tmp)] = '\0';
-                        }
-                        else {
-                            if(strstr(tmp, needed_info)) {
-                                strtok(tmp, ":");
-                                info = strtok(NULL, ":");
-
-                                break;
-                            }
-                            else {
-                                memset(tmp, '\0', 1024);
-                            }
-                        }
-                    }
-                    if(cur_char == EOF) {
-                        fprintf(stderr, "Cannot find needed row in info file");
-                    }
-
-                    fclose(cpu_info_file);
-
-                    info = info + 1;
-                    memcpy(cpu_name, info, 1024);
-                }
-            
-
-                snprintf(msg, 1024, tmp1, (strlen(cpu_name) + 1));
-                strcat(msg, cpu_name);
-                strcat(msg, "\n");
+                create_response(response, payload, payload_len);
             }
             else if(strcmp(path, "/load") == 0) {
-                tmp1 = "HTTP/1.1 200 OK\r\nContent-Length: %ld\r\nContent-Type: text/plain\r\n\r\n";
-
-                FILE* cpu_stat_file = fopen("/proc/stat", "r");
-                if(!cpu_stat_file) {
-                    perror("Unable to get CPU status!");
+                if(!get_load(payload, &payload_len)) {
+                    close(server_socket);
+                    return EXIT_FAILURE;
                 }
-
-                char tmp[1024];
-                memset(tmp, '\0', 1024);
-                if(fgets(tmp, 1024, cpu_stat_file) == NULL) {
-                    break;
-                }
-
-                char* start = strtok(tmp, " ");
-                if(!strstr(start, "cpu")) {
-                    break;
-                }
-
-
-                char* user_str = strtok(NULL, " ");
-                char* nice_str = strtok(NULL, " ");
-                char* system_str = strtok(NULL, " ");
-                char* idle_str = strtok(NULL, " ");
-                char* io_wait_str = strtok(NULL, " ");
-                char* irq_str = strtok(NULL, " ");
-                char* softirq_str = strtok(NULL, " ");
-                char* steal_str = strtok(NULL, " ");
-
-                unsigned int puser = atoi(user_str);
-                unsigned int pnice = atoi(nice_str);
-                unsigned int psystem = atoi(system_str);
-                unsigned int pidle = atoi(idle_str);
-                unsigned int pio_wait = atoi(io_wait_str);
-                unsigned int pirq = atoi(irq_str);
-                unsigned int psoftirq = atoi(softirq_str);
-                unsigned int psteal = atoi(steal_str);
-
-                fseek(cpu_stat_file, 0, SEEK_SET);
-
-                sleep(1);
-
-                 if(fgets(tmp, 1024, cpu_stat_file) == NULL) {
-                    break;
-                }
-
-                start = strtok(tmp, " ");
-                user_str = strtok(NULL, " ");
-                nice_str = strtok(NULL, " ");
-                system_str = strtok(NULL, " ");
-                idle_str = strtok(NULL, " ");
-                io_wait_str = strtok(NULL, " ");
-                irq_str = strtok(NULL, " ");
-                softirq_str = strtok(NULL, " ");
-                steal_str = strtok(NULL, " ");
-
-                unsigned int user = atoi(user_str);
-                unsigned int nice = atoi(nice_str);
-                unsigned int system = atoi(system_str);
-                unsigned int idle = atoi(idle_str);
-                unsigned int io_wait = atoi(io_wait_str);
-                unsigned int irq = atoi(irq_str);
-                unsigned int softirq = atoi(softirq_str);
-                unsigned int steal = atoi(steal_str);
-
-
-                pidle = pidle + pio_wait;
-                idle = idle + io_wait;
-
-                //Computation of CPU load was taken from https://stackoverflow.com/questions/23367857/accurate-calculation-of-cpu-usage-given-in-percentage-in-linux
-                unsigned int pnon_idle = puser + pnice + psystem + pirq + psoftirq + psteal;
-                unsigned int non_idle = user + nice + system + irq + softirq + steal;
-
-                unsigned int ptotal = pidle + pnon_idle;
-                unsigned int total = idle + non_idle;
-
-                unsigned int total_diff = total - ptotal;
-                unsigned int idle_diff = idle - pidle;
-
-                double cpu_load_perc = ((total_diff - idle_diff)/(double)total_diff)*100;
-
-                snprintf(tmp, 1024, "%f", cpu_load_perc);
-                snprintf(msg, 1024, tmp1, (strlen(tmp) + 1));
-                strcat(msg, tmp);
-                strcat(msg, "\n");
+                
+                create_response(response, payload, payload_len);
             }
-            else {
-                tmp1 = "HTTP/1.1 404 Not Found\r\n";
-                memcpy(msg, tmp1, strlen(tmp1) + 1);
+            else { //Given path was not recognized
+                memcpy(response, NOT_FOUND_HEADER, strlen(NOT_FOUND_HEADER) + 1);
             }
-
         }
 
-        send(socket, msg, (strlen(msg) + 1)*sizeof(char), 0);
+        send(socket, response, strlen(response)*sizeof(char), 0);
 
         close(socket);
     }
