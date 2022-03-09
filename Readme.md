@@ -39,7 +39,7 @@ Se serverem je možné komunikovat (po jeho zprovoznění) pomocí prohlížeče
 
 + **load** vrátí aktuální zatížení procesoru (v procentech)
 
-HTTP žádost by měla být ve validním formátu a použita by měla být metoda `GET`. V opačném případě je vrácena HTTP odpověď `400 Bad Request`. V případě, že je CESTA neodpovídá žádné výše pospané možnosti, je vrácena odpověď s kódem `404 Not Found`. Jinak je navrácena HTTP odpověď `200 OK`.
+HTTP žádost by měla být ve validním formátu a použita by měla být metoda `GET` (kontrolován je první řádek HTTP žádosti). V opačném případě je vrácena HTTP odpověď `400 Bad Request`. V případě, že je CESTA neodpovídá žádné výše pospané možnosti, je vrácena odpověď s kódem `404 Not Found`. Jinak je navrácena HTTP odpověď `200 OK`.
 
 ## Příklady
 Výpis síťového jména počítače:

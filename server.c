@@ -260,15 +260,17 @@ bool get_load(char *buffer, size_t *len) {
         return false;
     }
     
-    //Computation of CPU load was taken from https://stackoverflow.com/questions/23367857/accurate-calculation-of-cpu-usage-given-in-percentage-in-linux
+    //Computation algorithm of CPU load was inspired by https://stackoverflow.com/questions/23367857/accurate-calculation-of-cpu-usage-given-in-percentage-in-linux
+    unsigned int pidle = prev_stats[IDLE] + prev_stats[IO_WAIT];
+    unsigned int idle = stats[IDLE] + stats[IO_WAIT];
     unsigned int pnon_idle = prev_stats[USER] + prev_stats[NICE] + prev_stats[SYSTEM] + prev_stats[IRQ] + prev_stats[SOFTIRQ] + prev_stats[STEAL];
     unsigned int non_idle = stats[USER] + stats[NICE] + stats[SYSTEM] + stats[IRQ] + stats[SOFTIRQ] + stats[STEAL];
 
-    unsigned int ptotal = prev_stats[IDLE] + pnon_idle;
-    unsigned int total = stats[IDLE] + non_idle;
+    unsigned int ptotal = pidle + pnon_idle;
+    unsigned int total = idle + non_idle;
 
     unsigned int total_diff = total - ptotal;
-    unsigned int idle_diff = stats[IDLE] - prev_stats[IDLE];
+    unsigned int idle_diff = idle - pidle;
 
     double cpu_load_perc = ((total_diff - idle_diff)/(double)total_diff)*100;
     //
@@ -289,15 +291,26 @@ char * create_response(char *dest, char *msg, size_t msg_len) {
 }
 
 /**
- * @brief Get the path from HTTM request and checks its validity
+ * @brief Get the path from HTTP request and checks its validity
  * @param req Pointer to HTTP request message
- * @return char* Pointer to path from HTTP request (or NULL if HTTP request has invalid format) 
+ * @return char* Pointer to path from HTTP request (or NULL if HTTP request has invalid format)
+ * @note it requires at least GET method, path, HTTP version on first line
  */
 char * get_path(char *req) {
     char *method = strtok(req, " ");
-    (void)method;
+    if(!method || strcmp(method, "GET") != 0) {
+        return NULL;
+    }
 
     char *path = strtok(NULL, " ");
+    if(!path) {
+        return NULL;
+    }
+
+    char *http_version = strtok(NULL, "\n");
+    if(!http_version) {
+        return NULL;
+    }
 
     return path;
 }
