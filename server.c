@@ -4,12 +4,11 @@
  *                                File: server.c
  *                            Author: Vojtech Dvorak
  * 
- *                                  Feb 2022
+ *                                  March 2022
  * 
  * ***************************************************************************/
 
 #include <sys/socket.h>
-#include <sys/types.h>
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -24,10 +23,10 @@
 #define MAX_PORT_NUM 65535
 
 #define HTTP_RESP_HEADER "HTTP/1.1 200 OK\r\nContent-Length: %ld\r\nContent-Type: text/plain\r\n\r\n"
-#define NOT_FOUND_HEADER "HTTP/1.1 404 Not Found\r\n"
-#define BAD_REQUEST_HEADER "HTTP/1.1 400 Bad Request\r\n"
+#define NOT_FOUND_HEADER "HTTP/1.1 404 Not Found\r\nContent-Length: 16\r\nContent-Type: text/plain\r\n\r\n404 Not Found!\r\n"
+#define BAD_REQUEST_HEADER "HTTP/1.1 400 Bad Request\r\nContent-Length: 18\r\nContent-Type: text/plain\r\n\r\n400 Bad Request!\r\n"
 
-#define BUFFER_SIZE 2048
+#define BUFFER_SIZE 4096
 
 typedef enum stat_fields {
     USER, NICE, SYSTEM, IDLE, IO_WAIT, IRQ, SOFTIRQ, STEAL, STAT_FIELDS_NUM
@@ -291,12 +290,16 @@ char * create_response(char *dest, char *msg, size_t msg_len) {
 }
 
 /**
- * @brief Get the path from HTTP request and checks its validity
+ * @brief Get the path from HTTP request and checks its validity (request line and presence of blank line)
  * @param req Pointer to HTTP request message
  * @return char* Pointer to path from HTTP request (or NULL if HTTP request has invalid format)
  * @note it requires at least GET method, path, HTTP version on first line
  */
 char * get_path(char *req) {
+    if(req == NULL) {
+        return NULL;
+    }
+
     char *method = strtok(req, " ");
     if(!method || strcmp(method, "GET") != 0) {
         return NULL;
@@ -307,7 +310,7 @@ char * get_path(char *req) {
         return NULL;
     }
 
-    char *http_version = strtok(NULL, "\n");
+    char *http_version = strtok(NULL, "\r\n");
     if(!http_version) {
         return NULL;
     }
@@ -337,8 +340,9 @@ int main(int argc, char **argv) {
             return EXIT_FAILURE;
         }
 
-        size_t msg_len = read(socket, msg_buffer, BUFFER_SIZE);
+        size_t msg_len = read(socket, msg_buffer, BUFFER_SIZE - 1);
         size_t payload_len = 0;
+        msg_buffer[msg_len] = '\0'; //Set correct ending to message
 
         if(msg_len > 0) {
             char *path = get_path(msg_buffer); //Get path from HTTP request
